@@ -10,18 +10,52 @@ from keras.preprocessing.image import ImageDataGenerator
 import resnet_cifar10_v2
 import matplotlib.pyplot as plt
 from extra_keras_datasets import stl10
-
-
-
-
 from keras.datasets import cifar10
-(x_train, y_train), (x_test, y_test) = cifar10.load_data()
+from tensorflow.python.client import device_lib
+print(device_lib.list_local_devices())
+#globals
+AUTO = tf.data.AUTOTUNE
+BATCH_SIZE = 128
+EPOCHS = 40
+CROP_TO = 32
+PROJECT_DIM = 2048
+LATENT_DIM = 512
+WEIGHT_DECAY = 0.0004
+N = 2
+DEPTH = N * 8 + 2
+NUM_BLOCKS = ((DEPTH - 2) // 9) - 1
+dataset = "cifar10"
+#dataset = "stl10"
 
+#10% of the original data set used for training.
+remove_part_dataset = 0.1
 
-#for index in range(0, len(x_train)):
+#params to the DirectPred
+useEMA=True
+beta=0.996
+freq=1
+use_direct_pred=False
+rho=0.3
+epsilon=0.1
+learning_rate=0.003
+momentum=0.9
+
+#params to the linear evaluator
+learning_rate=0.0003
+decay=0.001
+
 
 def subset_of_data(remove_part, x, y):
+  """
+     Removes samples and the corresponding labels from the given samples x and labels y.
+     The function removes the same amount of samples from each class.
+     remove_part corresponds to the fraction of the original data that should be left.
+     i.e. remove_part = 0.1 means that 10% of the original data will be left.
 
+     Returns:
+     x_new, y_new
+     The new samples with corresponding labels.
+  """
   index_array = np.arange(len(x))
   np.random.shuffle(index_array)
   store_dict = np.zeros((1,10))
@@ -39,43 +73,16 @@ def subset_of_data(remove_part, x, y):
       y_new.append(y[index_array[loop_index]])
     loop_index +=1
 
-  print(store_dict)
-  print(store_dict_finished)
+
   return x_new, y_new
-
-x_train, y_train = subset_of_data(0.1, x_train, y_train)
-
-
-
-#(x_train, y_train), (x_test, y_test) = stl10.load_data()
-
-#for i in range(0, len(y_train)):
-#  y_train[i] = y_train[i]-1
-
-#for i in range(0, len(y_test)):
-#  y_test[i] = y_test[i]-1
-
-#print(y_train)
-
-print(f"Total training examples: {len(x_train)}")
-print(f"Total test examples: {len(x_test)}")
-
-AUTO = tf.data.AUTOTUNE
-BATCH_SIZE = 128
-EPOCHS = 40
-CROP_TO = 32
-#SEED = 26
-
-
-PROJECT_DIM = 2048
-LATENT_DIM = 512
-WEIGHT_DECAY = 0.0004
-
-
 
 
 
 def flip_random_crop(image):
+    """
+        Flips the image to the left or right and randomly crops the image
+        to the size (CROP_TO, CROP_TO, 3)
+    """
     # With random crops we also apply horizontal flipping.
     image = tf.image.random_flip_left_right(image)
     image = tf.image.random_crop(image, (CROP_TO, CROP_TO, 3))
@@ -83,6 +90,10 @@ def flip_random_crop(image):
 
 
 def color_jitter(x, strength=[0.4, 0.4, 0.4, 0.1]):
+    """
+    Color jitter augmentation of the image.
+    """
+
     x = tf.image.random_brightness(x, max_delta=0.8 * strength[0])
     x = tf.image.random_contrast(
         x, lower=1 - 0.8 * strength[1], upper=1 + 0.8 * strength[1]
@@ -98,6 +109,10 @@ def color_jitter(x, strength=[0.4, 0.4, 0.4, 0.1]):
 
 
 def color_drop(x):
+
+    """
+    Color drop augmentation of the image.
+    """
     x = tf.image.rgb_to_grayscale(x)
     x = tf.tile(x, [1, 1, 3])
     return x
@@ -111,73 +126,28 @@ def random_apply(func, x, p):
 
 
 def custom_augment(image):
-    # As discussed in the SimCLR paper, the series of augmentation
-    # transformations (except for random crops) need to be applied
-    # randomly to impose translational invariance.
+    """
+    The custom augmentation according to the paper.
+    First random flip and crop with p=1. .
+    Then color_jitter with p = 0.8
+    Then color_drop with p = 0.2 .
+
+    Return the augmented image.
+    """
     image = flip_random_crop(image)
     image = random_apply(color_jitter, image, p=0.8)
     image = random_apply(color_drop, image, p=0.2)
     return image
 
 
-# convert data into tensorflow objects
-ssl_ds_one = tf.data.Dataset.from_tensor_slices(x_train)
-ssl_ds_one = (
-    ssl_ds_one.shuffle(1024)
-    .map(custom_augment, num_parallel_calls=AUTO)
-    .batch(BATCH_SIZE)
-    .prefetch(AUTO)
-)
-
-ssl_ds_two = tf.data.Dataset.from_tensor_slices(x_train)
-ssl_ds_two = (
-    ssl_ds_two.shuffle(1024)
-    .map(custom_augment, num_parallel_calls=AUTO)
-    .batch(BATCH_SIZE)
-    .prefetch(AUTO)
-)
-
-# We then zip both of these datasets.
-ssl_ds = tf.data.Dataset.zip((ssl_ds_one, ssl_ds_two))
-
-# Visualize a few augmented images.
-sample_images_one = next(iter(ssl_ds_one))
-plt.figure(figsize=(10, 10))
-for n in range(25):
-    ax = plt.subplot(5, 5, n + 1)
-    plt.imshow(sample_images_one[n].numpy().astype("int"))
-    plt.axis("off")
-#plt.show()
-
-# Ensure that the different versions of the dataset actually contain
-# identical images.
-sample_images_two = next(iter(ssl_ds_two))
-plt.figure(figsize=(10, 10))
-for n in range(25):
-    ax = plt.subplot(5, 5, n + 1)
-    plt.imshow(sample_images_two[n].numpy().astype("int"))
-    plt.axis("off")
-#plt.show()
-
-
-
-#i followed the pseudo code from https://arxiv.org/pdf/2006.07733.pdf (original byol paper)
-
-
-#from our paper:Experiment setup. Unless explicitly stated, in all our experiments, we use ResNet-18 as the backbone network, two-layer
-#MLP (with BN and ReLU) as the projector, and a linear predictor. For STL-10 and CIFAR-10, we use SGD as the optimizer
-#with learning rate α = 0.03, momentum 0.9, weight decay η¯ = 0.0004 and EMA parameter γa = 0.996. The batchsize is
-#128. Each setting is repeated 5 times to compute mean and standard derivation. We report final number as “mean±std”.
-
-
-N = 2
-DEPTH = N * 8 + 2
-NUM_BLOCKS = ((DEPTH - 2) // 9) - 1
-
 
 
 def get_encoder():
-    # Input and backbone.
+    """
+    Returns the encoder network. The backbone network is a ResNet16
+    and the projector head consists of a two-layer MLP with batch normalization
+    and ReLU activation function.
+    """
     inputs = layers.Input((CROP_TO, CROP_TO, 3))
     x = layers.Rescaling(scale=1.0 / 127.5, offset=-1)(
         inputs
@@ -199,7 +169,11 @@ def get_encoder():
     return tf.keras.Model(inputs, outputs, name="encoder")
 
 def get_target():
-  # Input and backbone.
+    """
+    Returns the target network. The backbone network is a ResNet16
+    and the projector head consists of a two-layer MLP with batch normalization
+    and ReLU activation function.
+    """
     inputs = layers.Input((CROP_TO, CROP_TO, 3))
     x = layers.Rescaling(scale=1.0 / 127.5, offset=-1)(
         inputs
@@ -221,6 +195,11 @@ def get_target():
     return tf.keras.Model(inputs, outputs, name="target")
 
 def get_predictor():
+    """
+        Returns the predictor model. The model consists of a single
+        linear layer (with no activation). Is equivalent to a matrix multiplication.
+
+    """
     model = tf.keras.Sequential(
         [
             layers.Input((PROJECT_DIM,)),
@@ -229,30 +208,40 @@ def get_predictor():
                 use_bias=False,
                 kernel_regularizer=regularizers.l2(WEIGHT_DECAY),
             ),
-            #layers.ReLU(),
-            #layers.BatchNormalization(),
-            #layers.Dense(PROJECT_DIM),
+
         ],
         name="predictor",
     )
     return model
 
-def compute_loss(p, z, stopgradient):
-    # The authors of SimSiam emphasize the impact of
-    # the `stop_gradient` operator in the paper as it
-    # has an important role in the overall optimization.
+def compute_loss(p, t, stopgradient):
+    """
+        Computes the L2-loss according to equation 1 in the report.
+        The input p is the output of the predictor
+        and the input t is the output of the target network.
+    """
+
+    #stop gradient for t as in the architecture.
     if stopgradient:
-      z = tf.stop_gradient(z)
+      t = tf.stop_gradient(t)
 
+    #first we l2 normalize.
     p = tf.math.l2_normalize(p, axis=1)
-    z = tf.math.l2_normalize(z, axis=1)
-    # Negative cosine similarity (minimizing this is
-    # equivalent to maximizing the similarity).
-    return -tf.reduce_mean(tf.reduce_sum((p * z), axis=1))
+    t = tf.math.l2_normalize(t, axis=1)
 
-class SimSiam(tf.keras.Model):
+    #which means that minimizing this expression is equivalent to minimizing
+    #L2-loss. They do the same in the original paper's authors code.
+    return -tf.reduce_mean(tf.reduce_sum((p * t), axis=1))
+
+class DirectPred(tf.keras.Model):
+
+    """
+        The DirectPred class. Setting use_direct_pred =False is equivalent to that
+        the network is updated only via sgd and thus is a BYOL network.
+        Setting useEMA=False also and this network simplifies to a SimSiam network.
+    """
     def __init__(self, encoder, predictor, target, useEMA=True, beta=0.9, freq=1, use_direct_pred=True, rho=0.3, epsilon=0.1):
-        super(SimSiam, self).__init__()
+        super(DirectPred, self).__init__()
         self.encoder = encoder
         self.predictor = predictor
         self.target = target
@@ -269,10 +258,6 @@ class SimSiam(tf.keras.Model):
     def metrics(self):
         return [self.loss_tracker]
 
-
-
-
-
     def train_step(self, data):
         # Unpack the data.
         ds_one, ds_two = data
@@ -282,75 +267,62 @@ class SimSiam(tf.keras.Model):
             z1, z2 = self.encoder(ds_one), self.encoder(ds_two)
             t1, t2 = self.target(ds_one), self.target(ds_two)
             p1, p2 = self.predictor(z1), self.predictor(z2)
-            # Note that here we are enforcing the network to match
-            # the representations of two differently augmented batches
-            # of data.
-            #print(z1.shape)
 
 
+            #DirectPred update scheme for W_p. See equation 2-4 in the report.
             if self.current_freq%self.freq ==0 and self.use_direct_pred==True:
 
+
+              #corr(f1, f2)
               F_corr = tfp.stats.correlation(z1, z2)
-              #equation 19
+
+              #equation 4
               self.F = self.rho*self.F + (1-self.rho)*F_corr
 
-              #print(F.shape)
-              e, v = tf.linalg.eigh(self.F)
-              #print(e)
-              e = tf.linalg.diag(e)
-              e_numpy = e.numpy()
-              max_e = np.max(e_numpy)
-              e = tf.clip_by_value(e, 0., max_e)
+              #Eigen decomposition of F
+              sigma, u = tf.linalg.eigh(self.F)
 
+              #sigma
+              sigma = tf.linalg.diag(sigma)
+              sigma_numpy = sigma.numpy()
 
-              e = tf.math.divide(e, max_e)
+              #the maximum eigenvalue of F.
+              max_sigma = np.max(sigma_numpy)
 
-              #print(v)
-              vT = tf.transpose(v)
-              Fest = tf.tensordot(tf.tensordot(v, e, axes=1), vT, axes=1)
-              #print(tf.math.equal(F, Fest))
-              #print(F)
-              #print(Fest)
+              #we make sure theres no negative eigenvalues.
+              sigma = tf.clip_by_value(sigma, 0., max_sigma)
 
-              #print(max_e)
+              #rescale the eigenvalues by the maximum value so that
+              #all the eigenvalues are inbetween 0 and 1.
+              sigma = tf.math.divide(sigma, max_sigma)
 
-              p = tf.math.add(tf.math.sqrt(e), self.epsilon)
+              #U^T
+              uT = tf.transpose(u)
+
+              #p_j see equation 2.
+              p = tf.math.add(tf.math.sqrt(sigma), self.epsilon)
               p_numpy = p.numpy()
               max_p = np.max(p_numpy)
               p = tf.clip_by_value(p, 1e-4, max_p)
+
+              #then we make a diagonal matrix with p on the diagonal.
               p_diag = tf.linalg.diag_part(p)
               p_diag = tf.linalg.diag(p_diag)
 
-              new_W_p = tf.tensordot(tf.tensordot(v, p_diag, axes=1), vT, axes=1)
+              #and then we compute the new W_p according to equation 3
+              new_W_p = tf.tensordot(tf.tensordot(u, p_diag, axes=1), uT, axes=1)
 
-
-              #now set the weights of the predictor to new_W_p somehow?
-
+              #now set the weights of the predictor to new_W_p
               self.predictor.layers[0].set_weights([new_W_p])
 
-
-              #maybe our self.predictor has bad shape. maybe we should only have 1 layer since it should be linear.
-              #also our p_diag is in the wrong form. it should be 2048x2048 not (2048,)
-              #also we should send [new_W_p] as the thing to set. thats why its been complaining.
-              #also the classses of stl10 seems to be between 1 and 10 instead of 0 and 9
-
-
-              #todo:
-              #also in accuracy evaluation, the classifier wants an object of 32x32x3 which
-              #the images of stl10 is not.... how to fix this idk?
-
-
-              #print(self.predictor.weights.shape)
-              # l = 0
-              #for layer_predict in self.predictor.layers:
-              #  print(l)
-              ##  print(layer_predict.trainable_weights)
-              #  l = l+1
-
-              #self.predictor.set_weights(new_W_p)
-
+            #compute the total loss.
             loss = compute_loss(p1, t2, True) / 2 + compute_loss(p2, t1, True) / 2
 
+
+        #Computing gradients.
+
+        #if we are not updating via DirectPred then we simply compute gradients
+        #via sgd for both the encoder and predictor.
         if self.current_freq % self.freq !=0 or self.use_direct_pred == False:
 
           # Compute gradients and update the parameters.
@@ -360,6 +332,7 @@ class SimSiam(tf.keras.Model):
           gradients = tape.gradient(loss, learnable_params)
           self.optimizer.apply_gradients(zip(gradients, learnable_params))
 
+          #update the target as exponential moving average with the encoder
           if self.useEMA == True:
             self.EMA_updater(self.beta, self.target, self.encoder)
 
@@ -367,6 +340,11 @@ class SimSiam(tf.keras.Model):
           self.loss_tracker.update_state(loss)
           self.current_freq += 1
           return {"loss": self.loss_tracker.result()}
+
+        #if we are updating via directPred then we update the predictor via
+        #setting it to W_p which we have already done
+        #in the "with tf.GradientTape() as tape: block". Otherwise everything
+        #is the same.
         else:
           # Compute gradients and update the parameters.
           learnable_params = (
@@ -384,78 +362,118 @@ class SimSiam(tf.keras.Model):
           self.current_freq += 1
           return {"loss": self.loss_tracker.result()}
 
-    #testing with EMA. here we set the weights of the target network to the exponential moving average
-    #of the target and encoder network with EMA parameter beta. Now we just need
-    #to call this function in self.train_step AFTER encoder has been updated (so that
-    #the encoder with the newly updated parameters is used for this update).
-    # i used these 2 to check https://github.com/lucidrains/byol-pytorch/blob/master/byol_pytorch/byol_pytorch.py
-    # https://medium.com/the-dl/easy-self-supervised-learning-with-byol-53b8ad8185d
-    #+ some more good links
-    #https://keras.io/api/models/model_saving_apis/#get_weights-method
+    #The updater of the target network as an exponential moving average between
+    #the target and encoder network.
     def EMA_updater(self, beta, target, encoder):
 
         for layer_target, layer_encoder in zip(self.target.layers, self.encoder.layers):
 
-
             if layer_target.trainable_weights != []:
-              test = []
+              new_weights = []
               for i in range(len(layer_target.weights)):
 
                   tensor = tf.math.add(tf.math.scalar_mul(beta, layer_target.weights[i]), tf.math.scalar_mul((1-beta),layer_encoder.weights[i]))
-                  test.append(tensor.numpy())
+                  new_weights.append(tensor.numpy())
 
-              layer_target.set_weights(test)
+              layer_target.set_weights(new_weights)
 
-# Create a cosine decay learning scheduler.
-num_training_samples = len(x_train)
-steps = EPOCHS * (num_training_samples // BATCH_SIZE)
 
-# Compile model and start training.
-simsiam = SimSiam(get_encoder(), get_predictor(), get_target(), useEMA=True, beta=0.996, freq=1, use_direct_pred=False, rho=0.3, epsilon=0.1)
-simsiam.compile(optimizer=tf.keras.optimizers.SGD(learning_rate=0.003, momentum=0.9), run_eagerly=True)
-history = simsiam.fit(ssl_ds, epochs=EPOCHS)
+def main():
+    global CROP_TO
+    if dataset == "cifar10":
+        (x_train, y_train), (x_test, y_test) = cifar10.load_data()
+        CROP_TO = 32
 
-# Visualize the training progress of the model.
-plt.plot(history.history["loss"])
-plt.grid()
-plt.title("Negative Cosine Similairty")
-plt.show()
+    elif dataset =="stl10":
+        (x_train, y_train), (x_test, y_test) = stl10.load_data()
 
-# We first create labeled `Dataset` objects.
-train_ds = tf.data.Dataset.from_tensor_slices((x_train, y_train))
-test_ds = tf.data.Dataset.from_tensor_slices((x_test, y_test))
+        #the stl10 datasets classes are between 1 and 10 instead of 0 and 9.
+        #so we subtract 1 from all classes.
+        for i in range(0, len(y_train)):
+          y_train[i] = y_train[i]-1
 
-# Then we shuffle, batch, and prefetch this dataset for performance. We
-# also apply random resized crops as an augmentation but only to the
-# training set.
-train_ds = (
-    train_ds.shuffle(1024)
-    .map(lambda x, y: (flip_random_crop(x), y), num_parallel_calls=AUTO)
-    .batch(BATCH_SIZE)
-    .prefetch(AUTO)
-)
-test_ds = test_ds.batch(BATCH_SIZE).prefetch(AUTO)
+        for i in range(0, len(y_test)):
+          y_test[i] = y_test[i]-1
 
-# Extract the backbone ResNet20.
-backbone = tf.keras.Model(
-    simsiam.encoder.input, simsiam.encoder.get_layer("backbone_pool").output
-)
+        #the stl10 images are 96x96x3 size.
+        CROP_TO = 96
+    else:
+        print("error, no such dataset.")
 
-# We then create our linear classifier and train it.
-backbone.trainable = False
-inputs = layers.Input((CROP_TO, CROP_TO, 3))
-x = backbone(inputs, training=False)
-outputs = layers.Dense(10, activation="softmax")(x)
-linear_model = tf.keras.Model(inputs, outputs, name="linear_model")
+    x_train, y_train = subset_of_data(remove_part_dataset, x_train, y_train)
 
-# Compile model and start training.
-linear_model.compile(
-    loss="sparse_categorical_crossentropy",
-    metrics=["accuracy"],
-    optimizer=tf.keras.optimizers.Adam(learning_rate=0.0003, decay=0.001),
-)
-history = linear_model.fit(
-    train_ds, validation_data=test_ds, epochs=EPOCHS
-)
-_, test_acc = linear_model.evaluate(test_ds)
-print("Test accuracy: {:.2f}%".format(test_acc * 100))
+    print(f"Total training examples: {len(x_train)}")
+    print(f"Total test examples: {len(x_test)}")
+
+
+
+    # convert data into tensorflow objects
+    ssl_ds_one = tf.data.Dataset.from_tensor_slices(x_train)
+    ssl_ds_one = (
+        ssl_ds_one.shuffle(1024)
+        .map(custom_augment, num_parallel_calls=AUTO)
+        .batch(BATCH_SIZE)
+        .prefetch(AUTO)
+    )
+
+    ssl_ds_two = tf.data.Dataset.from_tensor_slices(x_train)
+    ssl_ds_two = (
+        ssl_ds_two.shuffle(1024)
+        .map(custom_augment, num_parallel_calls=AUTO)
+        .batch(BATCH_SIZE)
+        .prefetch(AUTO)
+    )
+
+    # We then zip both of these datasets.
+    ssl_ds = tf.data.Dataset.zip((ssl_ds_one, ssl_ds_two))
+
+
+    # Compile model and start training.
+    directPred = DirectPred(get_encoder(), get_predictor(), get_target(), useEMA=True, beta=0.996, freq=1, use_direct_pred=True, rho=0.3, epsilon=0.1)
+    directPred.compile(optimizer=tf.keras.optimizers.SGD(learning_rate=0.003, momentum=0.9), run_eagerly=True)
+    history = directPred.fit(ssl_ds, epochs=EPOCHS)
+
+
+
+    # We first create labeled `Dataset` objects.
+    train_ds = tf.data.Dataset.from_tensor_slices((x_train, y_train))
+    test_ds = tf.data.Dataset.from_tensor_slices((x_test, y_test))
+
+    # Then we shuffle, batch, and prefetch this dataset for performance. We
+    # also apply random resized crops as an augmentation but only to the
+    # training set.
+    train_ds = (
+        train_ds.shuffle(1024)
+        .map(lambda x, y: (flip_random_crop(x), y), num_parallel_calls=AUTO)
+        .batch(BATCH_SIZE)
+        .prefetch(AUTO)
+    )
+    test_ds = test_ds.batch(BATCH_SIZE).prefetch(AUTO)
+
+    # Extract the backbone ResNet20.
+    backbone = tf.keras.Model(
+        directPred.encoder.input, directPred.encoder.get_layer("backbone_pool").output
+    )
+
+    # We then create our linear classifier and train it.
+    backbone.trainable = False
+    inputs = layers.Input((CROP_TO, CROP_TO, 3))
+    x = backbone(inputs, training=False)
+    outputs = layers.Dense(10, activation="softmax")(x)
+    linear_model = tf.keras.Model(inputs, outputs, name="linear_model")
+
+    # Compile model and start training.
+    linear_model.compile(
+        loss="sparse_categorical_crossentropy",
+        metrics=["accuracy"],
+        optimizer=tf.keras.optimizers.Adam(learning_rate=0.0003, decay=0.001),
+    )
+    history = linear_model.fit(
+        train_ds, validation_data=test_ds, epochs=EPOCHS
+    )
+    _, test_acc = linear_model.evaluate(test_ds)
+    print("Test accuracy: {:.2f}%".format(test_acc * 100))
+
+
+if __name__ == "__main__":
+    main()
