@@ -12,11 +12,10 @@ import matplotlib.pyplot as plt
 from extra_keras_datasets import stl10
 from keras.datasets import cifar10
 from tensorflow.python.client import device_lib
-print(device_lib.list_local_devices())
 #globals
 AUTO = tf.data.AUTOTUNE
 BATCH_SIZE = 128
-EPOCHS = 40
+EPOCHS = 20
 CROP_TO = 32
 PROJECT_DIM = 2048
 LATENT_DIM = 512
@@ -25,6 +24,9 @@ N = 2
 DEPTH = N * 8 + 2
 NUM_BLOCKS = ((DEPTH - 2) // 9) - 1
 dataset = "cifar10"
+
+
+#stl10, does not work yet
 #dataset = "stl10"
 
 #10% of the original data set used for training.
@@ -37,12 +39,13 @@ freq=1
 use_direct_pred=False
 rho=0.3
 epsilon=0.1
-learning_rate=0.003
-momentum=0.9
+learning_rate_dP=0.003
+momentum_dP=0.9
 
 #params to the linear evaluator
-learning_rate=0.0003
-decay=0.001
+learning_rate_le=0.003
+decay_le=0.001
+EPOCHS_le = 20
 
 
 def subset_of_data(remove_part, x, y):
@@ -383,7 +386,7 @@ def main():
     if dataset == "cifar10":
         (x_train, y_train), (x_test, y_test) = cifar10.load_data()
         CROP_TO = 32
-
+    #still in progress
     elif dataset =="stl10":
         (x_train, y_train), (x_test, y_test) = stl10.load_data()
 
@@ -429,8 +432,8 @@ def main():
 
 
     # Compile model and start training.
-    directPred = DirectPred(get_encoder(), get_predictor(), get_target(), useEMA=True, beta=0.996, freq=1, use_direct_pred=True, rho=0.3, epsilon=0.1)
-    directPred.compile(optimizer=tf.keras.optimizers.SGD(learning_rate=0.003, momentum=0.9), run_eagerly=True)
+    directPred = DirectPred(get_encoder(), get_predictor(), get_target(), useEMA=useEMA, beta=beta, freq=freq, use_direct_pred=use_direct_pred, rho=rho, epsilon=epsilon)
+    directPred.compile(optimizer=tf.keras.optimizers.SGD(learning_rate=learning_rate_dP, momentum=momentum_dP), run_eagerly=True)
     history = directPred.fit(ssl_ds, epochs=EPOCHS)
 
 
@@ -466,14 +469,17 @@ def main():
     linear_model.compile(
         loss="sparse_categorical_crossentropy",
         metrics=["accuracy"],
-        optimizer=tf.keras.optimizers.Adam(learning_rate=0.0003, decay=0.001),
+        optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate_le, decay=decay_le),
     )
+    #here we just use the test data to monitor the loss as validation data.
     history = linear_model.fit(
-        train_ds, validation_data=test_ds, epochs=EPOCHS
+        train_ds, validation_data=test_ds, epochs=EPOCHS_le
     )
     _, test_acc = linear_model.evaluate(test_ds)
     print("Test accuracy: {:.2f}%".format(test_acc * 100))
 
 
 if __name__ == "__main__":
-    main()
+    for i in range(0, 3):
+
+        main()
