@@ -1,3 +1,10 @@
+#By Michael Palmé and Mikael Westlund
+#DD2412 Deep Learning Advanced Course
+#Final project
+#Inspiration taken from Keras' guide of how to make a SimSiam network
+#https://keras.io/examples/vision/simsiam/
+
+
 import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import layers

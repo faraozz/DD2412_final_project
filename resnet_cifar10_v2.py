@@ -1,3 +1,6 @@
+#ResNet for cifar10 from keras.
+#https://github.com/GoogleCloudPlatform/keras-idiomatic-programmer/blob/master/zoo/resnet/resnet_cifar10_v2.py
+
 import tensorflow as tf
 from tensorflow.keras import Model, Input
 from tensorflow.keras.layers import Conv2D, Dense, Flatten, BatchNormalization, ReLU, Add
